@@ -256,16 +256,7 @@ def _getNewJob(kind, data, assign, **kw):
 
     return job_id, params
 
-def createJob(kind, data, pool=((6379, '127.0.0.1'),), assign=None, **kw):
-    # Assign the job to a queue host
-    if assign is None:
-        assign = random.sample(pool, 1)[0]
-
-    job_id, params = _getNewJob(kind, data, assign, **kw)
-    priority_level = PRIORITIES[params['priority']]
-    
-
-    # update the pool set on each host
+def _updatePool(pool):
     for port, host in pool:
         client = redis.Redis(port=port, host=host)
         multi = client.pipeline()
@@ -273,20 +264,38 @@ def createJob(kind, data, pool=((6379, '127.0.0.1'),), assign=None, **kw):
             multi.sadd('q:pool', '%s:%d' % (host1, port1))
         multi.execute()
 
-    # copy job data to all hosts
+def _distributeJobData(job_id, params, pool):
+    priority_level = PRIORITIES[params['priority']]
     for port, host in pool:
         client = redis.Redis(host=host, port=port)
         try:
             client.zadd('q:jobs', job_id, priority_level)
             client.hmset('q:job:' + job_id, params)
-            client.zadd('q:jobs:%s:%d' % (assign[1], assign[0]), job_id, priority_level)
+            client.zadd('q:jobs:%s:%d' % (params['host'], int(params['port'])), job_id, priority_level)
         except redis.exceptions.ConnectionError, e:
             print >> sys.stderr, "ERORR:", e
 
-    # assign to final target
+def _assignJob(job_id, params):
+    priority_level = PRIORITIES[params['priority']]
     client = redis.Redis(host=params['host'], port=params['port'])
     client.zadd('q:jobs:%s' % (params['state']), job_id, priority_level)
-    client.zadd('q:jobs:%s:%s' % (kind, params['state']), job_id, priority_level)
+    client.zadd('q:jobs:%s:%s' % (params['kind'], params['state']), job_id, priority_level)
+
+def createJob(kind, data, pool=((6379, '127.0.0.1'),), assign=None, **kw):
+    # Assign the job to a queue host
+    if assign is None:
+        assign = random.sample(pool, 1)[0]
+
+    job_id, params = _getNewJob(kind, data, assign, **kw)
+    
+    # update the pool set on each host
+    _updatePool(pool)
+
+    # copy job data to all hosts
+    _distributeJobData(job_id, params, pool)
+
+    # assign to final target
+    _assignJob(job_id, params)
 
     return job_id, assign
 
