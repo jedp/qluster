@@ -50,16 +50,26 @@ def getCurrentTime():
 class Job(object):
     def __init__(self, job_id, port=6379, host='127.0.0.1'):
         self.client = redis.Redis(port=port, host=host)
-        self.removed = False
         self.job_id = job_id
+
+        # Load the job data from redis
         self.params = {}
         self.load()
 
-        # Try to claim the job
-        # This will raise an exception if it fails
+        # Before doing anything with the job, we must first claim it.
+        # This will raise a JobLocked nexception if it fails.
         self.claim()
 
-        # If successfully claimed, load the data
+        # Semaphore for signalling that a job is no longer writable.
+        # Trying to modify a removed job raises a JobRemoved exception.
+        self.removed = False
+
+        # Get the list of hosts/ports in the pool
+        self.pool = []
+        for address in self.client.smembers('q:pool'):
+            host, port = address.split(':')
+            self.pool.append( (host, int(port)) )
+            
 
     def _checkTimeout(fn):
         """
@@ -121,11 +131,17 @@ class Job(object):
 
     def remove(self):
         """
-        Remove the job 
+        Remove the job from all hosts in the pool
         """
         self._clearState()
-        self.client.delete('q:job:' + self.job_id)
-        self.client.zrem('q:jobs', self.job_id)
+
+        # remove from each host in the pool
+        for host, port in self.pool:
+            port = int(port)
+            client = redis.Redis(port=port, host=host)
+            client.delete('q:job:%s' % (self.job_id))
+            client.zrem('q:jobs', self.job_id)
+            client.zrem('q:jobs:%s:%d' % (self.params['host'], int(self.params['port'])), self.job_id)
         self.client.delete('q:job:%s:expires' % (self.job_id))
         self.expiration = 0
         self.removed = True
@@ -219,14 +235,11 @@ class Job(object):
 
             raise JobLocked("Job %s is locked" % (self.job_id))
 
-def createJob(kind, data, pool=((6379, '127.0.0.1'),), assign=None, **kw):
+def _getNewJob(kind, data, assign, **kw):
     job_id = str(uuid.uuid4())
     now = time.time()
-    priority = kw.get('priority', 'normal')
     state = 'inactive'
-
-    if assign is None:
-        assign = random.sample(pool, 1)[0]
+    priority = kw.get('priority', 'normal')
 
     params = {
         'kind': kind,
@@ -241,23 +254,45 @@ def createJob(kind, data, pool=((6379, '127.0.0.1'),), assign=None, **kw):
         'timeout': kw.get('timeout', ONE_MINUTE),
         'state': state}
 
-    priority_level = PRIORITIES[priority]
+    return job_id, params
 
-    # Duplicate job data to all hosts
+def createJob(kind, data, pool=((6379, '127.0.0.1'),), assign=None, **kw):
+    # Assign the job to a queue host
+    if assign is None:
+        assign = random.sample(pool, 1)[0]
+
+    job_id, params = _getNewJob(kind, data, assign, **kw)
+    priority_level = PRIORITIES[params['priority']]
+    
+
+    # update the pool set on each host
+    for port, host in pool:
+        client = redis.Redis(port=port, host=host)
+        multi = client.pipeline()
+        for port1, host1 in pool:
+            multi.sadd('q:pool', '%s:%d' % (host1, port1))
+        multi.execute()
+
+    # copy job data to all hosts
     for port, host in pool:
         client = redis.Redis(host=host, port=port)
         try:
             client.zadd('q:jobs', job_id, priority_level)
             client.hmset('q:job:' + job_id, params)
+            client.zadd('q:jobs:%s:%d' % (assign[1], assign[0]), job_id, priority_level)
         except redis.exceptions.ConnectionError, e:
             print >> sys.stderr, "ERORR:", e
 
-    # Now assign to target
+    # assign to final target
     client = redis.Redis(host=params['host'], port=params['port'])
-    client.zadd('q:jobs:%s' % (state), job_id, priority_level)
-    client.zadd('q:jobs:%s:%s' % (kind, state), job_id, priority_level)
+    client.zadd('q:jobs:%s' % (params['state']), job_id, priority_level)
+    client.zadd('q:jobs:%s:%s' % (kind, params['state']), job_id, priority_level)
 
     return job_id, assign
+
+def reassignJob(jid, pool=((6379, '127.0.0.1'),), assign=None):
+    pass
+        
 
 def claimJob(job_id):
     return Job(job_id)
