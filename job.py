@@ -2,7 +2,9 @@ import sys
 import datetime
 import dateutil.tz
 import time
+import random
 import redis
+import redis.exceptions
 import uuid
 
 PRIORITIES = {
@@ -224,16 +226,20 @@ class Job(object):
 
             raise JobLocked("Job %s is locked" % (self.job_id))
 
-def createJob(kind, data, **kw):
+def createJob(kind, data, pool=((6379, '127.0.0.1'),), assign=None, **kw):
     job_id = str(uuid.uuid4())
     now = time.time()
     priority = kw.get('priority', 'normal')
     state = 'inactive'
-    client = redis.Redis(port = kw.get('port', 6379))
+
+    if assign is None:
+        assign = random.sample(pool, 1)[0]
 
     params = {
         'kind': kind,
         'data': data,
+        'port': assign[0],
+        'host': assign[1],
         'created_at': now,
         'updated_at': now,
         'failed_at': None,
@@ -243,12 +249,22 @@ def createJob(kind, data, **kw):
         'state': state}
 
     priority_level = PRIORITIES[priority]
-    client.zadd('q:jobs', job_id, priority_level)
+
+    # Duplicate job data to all hosts
+    for port, host in pool:
+        client = redis.Redis(host=host, port=port)
+        try:
+            client.zadd('q:jobs', job_id, priority_level)
+            client.hmset('q:job:' + job_id, params)
+        except redis.exceptions.ConnectionError, e:
+            print >> sys.stderr, "ERORR:", e
+
+    # Now assign to target
+    client = redis.Redis(host=params['host'], port=params['port'])
     client.zadd('q:jobs:%s' % (state), job_id, priority_level)
     client.zadd('q:jobs:%s:%s' % (kind, state), job_id, priority_level)
-    client.hmset('q:job:' + job_id, params)
 
-    return job_id
+    return job_id, assign
 
 def claimJob(job_id):
     return Job(job_id)

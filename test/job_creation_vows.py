@@ -20,7 +20,7 @@ def to_be_less_than(topic, expected):
 class CreatingAJob(Vows.Context):
 
     def topic(self):
-        jid = qluster.job.createJob(kind='baking', data={'pie': 42}, port=PORT)
+        jid, _ = qluster.job.createJob(kind='baking', pool=((PORT, '127.0.0.1'),), data={'pie': 42})
         return jid
 
     def setup(self):
