@@ -48,25 +48,18 @@ def getCurrentTime():
 #   claimJob(job_id)
 
 class Job(object):
-    def __init__(self, job_id, **params):
-        self.client = redis.Redis(port = params.get('port', 6379))
+    def __init__(self, job_id, port=6379, host='127.0.0.1'):
+        self.client = redis.Redis(port=port, host=host)
         self.removed = False
-
-        # default data
-        self.params = {
-            'created_at': None,
-            'updated_at': None,
-            'failed_at': None,
-            'error': None,
-            'priority': PRIORITIES[params.get('priority', 'normal')],
-            'state': 'inactive',
-            'timeout': params.get('timeout', ONE_MINUTE),
-            'data': None}
-
-        self.expiration = 0
         self.job_id = job_id
-        self.claim()
+        self.params = {}
         self.load()
+
+        # Try to claim the job
+        # This will raise an exception if it fails
+        self.claim()
+
+        # If successfully claimed, load the data
 
     def _checkTimeout(fn):
         """
