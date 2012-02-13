@@ -38,11 +38,11 @@ def getCurrentTime():
     return datetime.datetime.now(dateutil.tz.tzlocal())
 
 # ----------------------------------------------------------------------
-# Job object
-# to create a job that doesn't exist, provide 'kind' and 'data' keywords.
-# to claim an existing job atomically, provide job_id
+# Job 
 #
-# or maybe just use these instead:
+# For claiming and working on an already-defined job
+#
+# For convenience, use these functions instead:
 #
 #   createJob(kind, data)
 #   claimJob(job_id)
@@ -300,7 +300,7 @@ def createJob(kind, data, pool=((6379, '127.0.0.1'),), assign=None, **kw):
     return job_id, assign
 
 def reassignJob(jid, pool=((6379, '127.0.0.1'),), assign=None):
-    pass
+    raise NotImplementedError()
         
 
 def claimJob(job_id):
