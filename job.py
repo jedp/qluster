@@ -18,6 +18,9 @@ ONE_HOUR = ONE_MINUTE * 60
 # ----------------------------------------------------------------------
 # exceptions
 
+class JobRemoved(Exception): 
+    pass
+
 class JobLocked(Exception): 
     def __init__(self, message, expires=0):
         Exception.__init__(self, message)
@@ -45,6 +48,7 @@ def getCurrentTime():
 class Job(object):
     def __init__(self, job_id, **params):
         self.client = redis.Redis(port = params.get('port', 6379))
+        self.removed = False
 
         # default data
         self.params = {
@@ -126,13 +130,18 @@ class Job(object):
         """
         self._clearState()
         self.client.delete('q:job:' + self.job_id)
+        self.client.zrem('q:jobs', self.job_id)
         self.client.delete('q:job:%s:expires' % (self.job_id))
         self.expiration = 0
+        self.removed = True
 
     def set(self, key, value):
         """
         Set a single value in the job's data hash and save to redis
         """
+        if self.removed:
+            raise JobRemoved("Cannot write to removed job")
+
         if key == 'state':
             self.setState('value')
         else:

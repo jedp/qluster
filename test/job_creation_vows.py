@@ -103,6 +103,17 @@ class CreatingAJob(Vows.Context):
                         return job
 
                     def it_is_gone_from_the_zsets(self, job):
+                        expect(client.zrange('q:jobs:baking', 0, -1)).to_equal([])
+                        expect(client.zrange('q:jobs', 0, -1)).to_equal([])
+                        expect(client.hgetall('q:job:%s' % (job.job_id))).to_equal({})
+
+                    class AndNowWritingToIt(Vows.Context):
+                        def topic(self, job):
+                            return job.set("data", {"oh": "noes"})
+
+                        def raises_an_exception(self, topic):
+                            expect(topic).to_be_an_error()
+
 
 
             
